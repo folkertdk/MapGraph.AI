@@ -1,20 +1,35 @@
 data:
-  image_dir: data/images
-  mask_dir: data/masks
-  img_size: 512
+  image_dir: data/subset/images
+  mask_dir: data/subset/masks
+  img_size: 256
+  strict_pairing: true
+  mask_threshold: 127
+  invert_mask: false
 
 model:
-  architecture: unet
-  encoder: resnet50
-  encoder_weights: imagenet
+  architecture: baseline
   in_channels: 3
-  classes: 1
+  out_channels: 1
+  base_channels: 16
+  num_experts: 3
 
 train:
-  epochs: 5
-  batch_size: 4
-  lr: 0.0001
+  epochs: 30
+  batch_size: 1
+  lr: 0.0005
+  weight_decay: 0.0001
+  val_split: 0.1
+  seed: 42
+  num_workers: 0
+  num_threads: 4
+  dice_weight: 1.5
+  bce_weight: 0.7
+  metric_threshold: 0.5
+
+predict:
+  min_component_area: 20
 
 output:
+  run_dir: outputs/baseline_run
   prediction_dir: outputs/predictions
   graph_dir: outputs/graphs
