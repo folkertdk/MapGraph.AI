@@ -6,6 +6,9 @@ __pycache__/
 # dataset khartoum
 data/subset/
 
+# outputs
+
+
 # C extensions
 *.so
 
