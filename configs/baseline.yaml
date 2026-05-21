@@ -1,6 +1,6 @@
 data:
-  image_dir: data/subset/images
-  mask_dir: data/subset/masks
+  image_dir: data/spacenet3/8bit/Vegas/images
+  mask_dir: data/spacenet3/8bit/Vegas/mask
   img_size: 256
   strict_pairing: true
   mask_threshold: 127
