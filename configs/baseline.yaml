@@ -1,6 +1,6 @@
 data:
-  image_dir: data/subset/images
-  mask_dir: data/subset/masks
+  image_dir: data/sample/images
+  mask_dir: data/sample/masks
   img_size: 256
   strict_pairing: true
   mask_threshold: 127
