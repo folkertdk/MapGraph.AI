@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 
 # dataset khartoum
-data/subset/
+data/
 
 # local datasets
 data/full/
