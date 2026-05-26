@@ -1,11 +1,6 @@
 data:
-<<<<<<< HEAD
-  image_dir: data/sample/images
-  mask_dir: data/sample/masks
-=======
-  image_dir: data/spacenet3/8bit/Vegas/images
-  mask_dir: data/spacenet3/8bit/Vegas/mask
->>>>>>> c3fcd7f5c6a2f923591f9ce0353df5b955174ab2
+  image_dir: data/khartoum/images
+  mask_dir: data/khartoum/masks
   img_size: 256
   strict_pairing: true
   mask_threshold: 127
