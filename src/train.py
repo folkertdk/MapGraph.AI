@@ -1,9 +1,21 @@
 """Train the road segmentation model.
 
-Important fix: this version uses Dice + weighted BCE loss. Road pixels are a
-small minority of a satellite tile, so plain BCE often learns the lazy solution:
-predict background everywhere. Dice directly rewards overlap with thin roads,
-and weighted BCE compensates for road/background imbalance.
+This training script supports both:
+
+1. Baseline U-Net
+   - Standard road segmentation model.
+   - Uses Dice + weighted BCE loss.
+
+2. MoE U-Net
+   - Mixture-of-Experts U-Net.
+   - Uses the same segmentation loss.
+   - Also supports MoE auxiliary load-balancing loss.
+   - Logs router entropy and expert usage for experiment analysis.
+
+Why the extra MoE logging matters:
+A Mixture-of-Experts model should not only improve Dice/IoU. We also want to
+show whether different experts are actually being used. This script therefore
+records expert usage and router entropy in the training CSV.
 """
 
 from __future__ import annotations
@@ -57,6 +69,7 @@ def dice_score_from_logits(
     masks: torch.Tensor,
     threshold: float = 0.5,
 ) -> float:
+    """Compute Dice score from raw logits."""
     probs = torch.sigmoid(logits)
     preds = (probs > threshold).float()
 
@@ -73,6 +86,7 @@ def iou_score_from_logits(
     masks: torch.Tensor,
     threshold: float = 0.5,
 ) -> float:
+    """Compute IoU score from raw logits."""
     probs = torch.sigmoid(logits)
     preds = (probs > threshold).float()
 
@@ -84,9 +98,56 @@ def iou_score_from_logits(
     return float(iou.mean().item())
 
 
-def unpack_model_output(output):
-    """MoE returns (logits, weights), baseline returns logits only."""
-    return output[0] if isinstance(output, tuple) else output
+def parse_model_output(output):
+    """Handle both baseline and MoE model outputs.
+
+    Baseline SimpleUNet returns:
+        logits
+
+    Polished MoEUNet returns:
+        logits, router_probs, aux_loss, diagnostics
+
+    Older/simple MoE variants may return:
+        logits, router_probs
+
+    Returns:
+        logits:
+            Segmentation logits.
+
+        aux_loss:
+            Optional MoE auxiliary load-balancing loss.
+
+        diagnostics:
+            Dictionary containing router statistics such as entropy and
+            mean expert usage.
+    """
+    if torch.is_tensor(output):
+        return output, None, {}
+
+    if not isinstance(output, (tuple, list)):
+        raise TypeError(f"Unexpected model output type: {type(output)}")
+
+    logits = output[0]
+    aux_loss = None
+    diagnostics = {}
+
+    if len(output) >= 2 and torch.is_tensor(output[1]):
+        router_probs = output[1]
+
+        with torch.no_grad():
+            diagnostics["mean_usage"] = router_probs.mean(dim=0)
+            diagnostics["entropy"] = -(
+                router_probs * torch.log(router_probs.clamp_min(1e-8))
+            ).sum(dim=1).mean()
+            diagnostics["selected_expert"] = torch.argmax(router_probs, dim=1)
+
+    if len(output) >= 3 and torch.is_tensor(output[2]):
+        aux_loss = output[2]
+
+    if len(output) >= 4 and isinstance(output[3], dict):
+        diagnostics.update(output[3])
+
+    return logits, aux_loss, diagnostics
 
 
 def estimate_pos_weight(dataset, max_batches: int = 50) -> tuple[float, float]:
@@ -120,12 +181,29 @@ def run_epoch(
     device,
     train: bool,
     threshold: float,
-) -> tuple[float, float, float]:
+    num_experts: int = 0,
+) -> dict:
+    """Run one training or validation epoch.
+
+    For baseline:
+        tracks segmentation loss, Dice, and IoU.
+
+    For MoE:
+        also tracks auxiliary load-balancing loss, router entropy,
+        and average expert usage.
+    """
     model.train(train)
 
     total_loss = 0.0
+    total_seg_loss = 0.0
+    total_aux_loss = 0.0
     total_dice = 0.0
     total_iou = 0.0
+    total_entropy = 0.0
+
+    expert_usage_sum = None
+    expert_usage_steps = 0
+
     steps = 0
 
     for batch in tqdm(loader, leave=False):
@@ -133,8 +211,15 @@ def run_epoch(
         masks = batch["mask"].to(device)
 
         with torch.set_grad_enabled(train):
-            logits = unpack_model_output(model(images))
-            loss = criterion(logits, masks)
+            output = model(images)
+            logits, aux_loss, diagnostics = parse_model_output(output)
+
+            seg_loss = criterion(logits, masks)
+
+            if aux_loss is not None:
+                loss = seg_loss + aux_loss
+            else:
+                loss = seg_loss
 
             if train:
                 optimizer.zero_grad(set_to_none=True)
@@ -143,15 +228,46 @@ def run_epoch(
                 optimizer.step()
 
         total_loss += float(loss.item())
+        total_seg_loss += float(seg_loss.item())
+
+        if aux_loss is not None:
+            total_aux_loss += float(aux_loss.item())
+
         total_dice += dice_score_from_logits(logits.detach(), masks, threshold)
         total_iou += iou_score_from_logits(logits.detach(), masks, threshold)
+
+        if "entropy" in diagnostics:
+            total_entropy += float(diagnostics["entropy"].detach().cpu().item())
+
+        if "mean_usage" in diagnostics:
+            usage = diagnostics["mean_usage"].detach().cpu()
+
+            if expert_usage_sum is None:
+                expert_usage_sum = torch.zeros_like(usage)
+
+            expert_usage_sum += usage
+            expert_usage_steps += 1
+
         steps += 1
 
-    return (
-        total_loss / max(steps, 1),
-        total_dice / max(steps, 1),
-        total_iou / max(steps, 1),
-    )
+    metrics = {
+        "loss": total_loss / max(steps, 1),
+        "seg_loss": total_seg_loss / max(steps, 1),
+        "aux_loss": total_aux_loss / max(steps, 1),
+        "dice": total_dice / max(steps, 1),
+        "iou": total_iou / max(steps, 1),
+        "router_entropy": total_entropy / max(steps, 1),
+        "expert_usage": [],
+    }
+
+    if expert_usage_sum is not None and expert_usage_steps > 0:
+        metrics["expert_usage"] = (
+            expert_usage_sum / expert_usage_steps
+        ).tolist()
+    elif num_experts > 0:
+        metrics["expert_usage"] = [0.0 for _ in range(num_experts)]
+
+    return metrics
 
 
 def main() -> None:
@@ -168,6 +284,10 @@ def main() -> None:
 
     data_cfg = cfg["data"]
     train_cfg = cfg["train"]
+    model_cfg = cfg.get("model", {})
+
+    architecture = model_cfg.get("architecture", "baseline").lower()
+    num_experts = int(model_cfg.get("num_experts", 0)) if architecture == "moe" else 0
 
     run_dir = ensure_dir(cfg["output"]["run_dir"])
 
@@ -185,6 +305,14 @@ def main() -> None:
     print(f"Loaded {len(dataset)} paired samples")
     print(f"Estimated road pixel fraction: {pos_fraction:.4%}")
     print(f"Using BCE pos_weight: {pos_weight_value:.2f}")
+
+    if architecture == "moe":
+        print(
+            "Using MoE architecture | "
+            f"num_experts={num_experts}, "
+            f"top_k={model_cfg.get('top_k', None)}, "
+            f"load_balance_weight={model_cfg.get('load_balance_weight', 0.0)}"
+        )
 
     if pos_fraction == 0.0:
         raise ValueError(
@@ -245,24 +373,36 @@ def main() -> None:
     best_val = math.inf
     log_path = run_dir / "training_log.csv"
 
+    fieldnames = [
+        "epoch",
+        "train_loss",
+        "train_seg_loss",
+        "train_aux_loss",
+        "train_dice",
+        "train_iou",
+        "train_router_entropy",
+        "val_loss",
+        "val_seg_loss",
+        "val_aux_loss",
+        "val_dice",
+        "val_iou",
+        "val_router_entropy",
+    ]
+
+    for expert_idx in range(num_experts):
+        fieldnames.append(f"train_expert_{expert_idx}_usage")
+        fieldnames.append(f"val_expert_{expert_idx}_usage")
+
     with open(log_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=[
-                "epoch",
-                "train_loss",
-                "train_dice",
-                "train_iou",
-                "val_loss",
-                "val_dice",
-                "val_iou",
-            ],
+            fieldnames=fieldnames,
         )
 
         writer.writeheader()
 
         for epoch in range(1, train_cfg.get("epochs", 50) + 1):
-            train_loss, train_dice, train_iou = run_epoch(
+            train_metrics = run_epoch(
                 model=model,
                 loader=train_loader,
                 criterion=criterion,
@@ -270,9 +410,10 @@ def main() -> None:
                 device=device,
                 train=True,
                 threshold=threshold,
+                num_experts=num_experts,
             )
 
-            val_loss, val_dice, val_iou = run_epoch(
+            val_metrics = run_epoch(
                 model=model,
                 loader=val_loader,
                 criterion=criterion,
@@ -280,28 +421,70 @@ def main() -> None:
                 device=device,
                 train=False,
                 threshold=threshold,
+                num_experts=num_experts,
             )
 
-            scheduler.step(val_loss)
+            scheduler.step(val_metrics["loss"])
 
             row = {
                 "epoch": epoch,
-                "train_loss": train_loss,
-                "train_dice": train_dice,
-                "train_iou": train_iou,
-                "val_loss": val_loss,
-                "val_dice": val_dice,
-                "val_iou": val_iou,
+                "train_loss": train_metrics["loss"],
+                "train_seg_loss": train_metrics["seg_loss"],
+                "train_aux_loss": train_metrics["aux_loss"],
+                "train_dice": train_metrics["dice"],
+                "train_iou": train_metrics["iou"],
+                "train_router_entropy": train_metrics["router_entropy"],
+                "val_loss": val_metrics["loss"],
+                "val_seg_loss": val_metrics["seg_loss"],
+                "val_aux_loss": val_metrics["aux_loss"],
+                "val_dice": val_metrics["dice"],
+                "val_iou": val_metrics["iou"],
+                "val_router_entropy": val_metrics["router_entropy"],
             }
+
+            for expert_idx in range(num_experts):
+                row[f"train_expert_{expert_idx}_usage"] = train_metrics["expert_usage"][
+                    expert_idx
+                ]
+                row[f"val_expert_{expert_idx}_usage"] = val_metrics["expert_usage"][
+                    expert_idx
+                ]
 
             writer.writerow(row)
             f.flush()
 
             print(
                 f"Epoch {epoch:03d} | "
-                f"train_loss={train_loss:.4f} dice={train_dice:.4f} iou={train_iou:.4f} | "
-                f"val_loss={val_loss:.4f} dice={val_dice:.4f} iou={val_iou:.4f}"
+                f"train_loss={train_metrics['loss']:.4f} "
+                f"dice={train_metrics['dice']:.4f} "
+                f"iou={train_metrics['iou']:.4f} | "
+                f"val_loss={val_metrics['loss']:.4f} "
+                f"dice={val_metrics['dice']:.4f} "
+                f"iou={val_metrics['iou']:.4f}"
             )
+
+            if num_experts > 0:
+                train_usage_text = ", ".join(
+                    [
+                        f"e{idx}={usage:.2f}"
+                        for idx, usage in enumerate(train_metrics["expert_usage"])
+                    ]
+                )
+
+                val_usage_text = ", ".join(
+                    [
+                        f"e{idx}={usage:.2f}"
+                        for idx, usage in enumerate(val_metrics["expert_usage"])
+                    ]
+                )
+
+                print(
+                    f"  MoE router | "
+                    f"train_entropy={train_metrics['router_entropy']:.4f} "
+                    f"val_entropy={val_metrics['router_entropy']:.4f}"
+                )
+                print(f"  Train expert usage: {train_usage_text}")
+                print(f"  Val expert usage:   {val_usage_text}")
 
             checkpoint = {
                 "model_state_dict": model.state_dict(),
@@ -313,8 +496,8 @@ def main() -> None:
 
             torch.save(checkpoint, run_dir / "last.pt")
 
-            if val_loss < best_val:
-                best_val = val_loss
+            if val_metrics["loss"] < best_val:
+                best_val = val_metrics["loss"]
                 torch.save(checkpoint, run_dir / "best.pt")
 
     print(f"Training complete. Checkpoints and log saved in: {run_dir}")

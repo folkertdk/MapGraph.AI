@@ -1,0 +1,50 @@
+data:
+  image_dir: data/mixed/images
+  mask_dir: data/mixed/masks
+  img_size: 256
+  strict_pairing: true
+  mask_threshold: 127
+  invert_mask: false
+
+model:
+  architecture: moe
+  in_channels: 3
+  out_channels: 1
+
+  # Smaller base_channels keeps MoE lighter.
+  # Because MoE has multiple U-Nets, base_channels: 16 means roughly 3 U-Nets.
+  base_channels: 8
+
+  # Number of expert U-Nets.
+  num_experts: 3
+
+  # Router size.
+  router_hidden_channels: 16
+
+  # Use only the top 2 experts per image.
+  # This makes the model more like a real sparse MoE.
+  top_k: 2
+
+  # Small regularization to prevent router collapse.
+  load_balance_weight: 0.01
+
+train:
+  epochs: 60
+  batch_size: 1
+  lr: 0.0005
+  weight_decay: 0.0001
+  val_split: 0.1
+  seed: 42
+  num_workers: 0
+  num_threads: 4
+  dice_weight: 1.5
+  bce_weight: 0.7
+  metric_threshold: 0.5
+
+predict:
+  min_component_area: 20
+
+output:
+  run_dir: outputs/moe_mixed_run
+  prediction_dir: outputs/moe_mixed_predictions
+  graph_dir: outputs/moe_mixed_graphs

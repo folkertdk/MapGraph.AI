@@ -1,0 +1,40 @@
+data:
+  image_dir: data/moe_smoke/images
+  mask_dir: data/moe_smoke/masks
+  img_size: 256
+  strict_pairing: true
+  mask_threshold: 127
+  invert_mask: false
+
+model:
+  architecture: moe
+  in_channels: 3
+  out_channels: 1
+
+  # Very small for quick testing.
+  base_channels: 4
+  num_experts: 3
+  router_hidden_channels: 8
+  top_k: 2
+  load_balance_weight: 0.01
+
+train:
+  epochs: 1
+  batch_size: 1
+  lr: 0.0005
+  weight_decay: 0.0001
+  val_split: 0.25
+  seed: 42
+  num_workers: 0
+  num_threads: 4
+  dice_weight: 1.5
+  bce_weight: 0.7
+  metric_threshold: 0.5
+
+predict:
+  min_component_area: 20
+
+output:
+  run_dir: outputs/moe_smoke_run
+  prediction_dir: outputs/moe_smoke_predictions
+  graph_dir: outputs/moe_smoke_graphs

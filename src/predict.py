@@ -1,14 +1,28 @@
 """Run inference with a trained road segmentation model.
 
-This version saves three outputs per image:
-1. binary mask used for graph extraction,
-2. probability map for debugging,
-3. overlay image so you can visually check whether roads are detected.
+This script supports both:
+
+1. Baseline U-Net
+   - Saves predicted mask, probability map, and overlay.
+
+2. MoE U-Net
+   - Saves the same visual prediction outputs.
+   - Also saves router/expert probabilities into a CSV file so we can analyse
+     which expert was used for each satellite tile.
+
+Prediction outputs per image:
+    1. *_pred_mask.png
+    2. *_probability.png
+    3. *_overlay.png
+
+Additional MoE output:
+    moe_router_weights.csv
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 from pathlib import Path
 
 import cv2
@@ -20,8 +34,33 @@ from tqdm import tqdm
 
 from .dataset import RoadSegmentationDataset
 from .model import build_model
-from .train import unpack_model_output
 from .utils import ensure_dir, get_device, load_config
+
+
+def parse_prediction_output(output):
+    """Handle both baseline and MoE model outputs during prediction.
+
+    Baseline returns:
+        logits
+
+    MoE returns:
+        logits, router_probs, aux_loss, diagnostics
+
+    We only need logits for the mask, but for MoE we also save router_probs.
+    """
+    if torch.is_tensor(output):
+        return output, None
+
+    if not isinstance(output, (tuple, list)):
+        raise TypeError(f"Unexpected model output type: {type(output)}")
+
+    logits = output[0]
+
+    router_probs = None
+    if len(output) >= 2 and torch.is_tensor(output[1]):
+        router_probs = output[1]
+
+    return logits, router_probs
 
 
 def otsu_threshold(prob_uint8: np.ndarray) -> float:
@@ -76,6 +115,10 @@ def main() -> None:
     pred_dir = ensure_dir(cfg["output"].get("prediction_dir", "outputs/predictions"))
     min_area = int(cfg.get("predict", {}).get("min_component_area", 20))
 
+    model_cfg = cfg.get("model", {})
+    architecture = model_cfg.get("architecture", "baseline").lower()
+    num_experts = int(model_cfg.get("num_experts", 0)) if architecture == "moe" else 0
+
     dataset = RoadSegmentationDataset(
         image_dir=cfg["data"]["image_dir"],
         mask_dir=cfg["data"]["mask_dir"],
@@ -94,11 +137,15 @@ def main() -> None:
 
     model.eval()
 
+    router_rows = []
+
     with torch.no_grad():
         for batch in tqdm(loader):
             images = batch["image"].to(device)
 
-            logits = unpack_model_output(model(images))
+            output = model(images)
+            logits, router_probs = parse_prediction_output(output)
+
             probs = torch.sigmoid(logits)[0, 0].cpu().numpy()
 
             prob_uint8 = np.clip(probs * 255.0, 0, 255).astype(np.uint8)
@@ -134,6 +181,34 @@ def main() -> None:
             Image.fromarray(mask_uint8).save(pred_dir / f"{source_name}_pred_mask.png")
             Image.fromarray(prob_uint8).save(pred_dir / f"{source_name}_probability.png")
             Image.fromarray(overlay).save(pred_dir / f"{source_name}_overlay.png")
+
+            if router_probs is not None:
+                probs_list = router_probs[0].detach().cpu().tolist()
+                selected_expert = int(np.argmax(probs_list))
+
+                row = {
+                    "image": source_name,
+                    "selected_expert": selected_expert,
+                }
+
+                for expert_idx, prob in enumerate(probs_list):
+                    row[f"expert_{expert_idx}_prob"] = prob
+
+                router_rows.append(row)
+
+    if router_rows:
+        router_csv_path = pred_dir / "moe_router_weights.csv"
+
+        fieldnames = ["image", "selected_expert"]
+        for expert_idx in range(num_experts):
+            fieldnames.append(f"expert_{expert_idx}_prob")
+
+        with open(router_csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(router_rows)
+
+        print(f"MoE router weights saved in: {router_csv_path}")
 
     print(f"Predicted masks, probability maps, and overlays saved in: {pred_dir}")
 

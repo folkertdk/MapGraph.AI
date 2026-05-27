@@ -1,0 +1,39 @@
+data:
+  image_dir: data/moe_test/images
+  mask_dir: data/moe_test/masks
+  img_size: 256
+  strict_pairing: true
+  mask_threshold: 127
+  invert_mask: false
+
+model:
+  architecture: moe
+  in_channels: 3
+  out_channels: 1
+  base_channels: 8
+  num_experts: 3
+  router_hidden_channels: 16
+  top_k: 2
+  load_balance_weight: 0.01
+
+train:
+  epochs: 5
+  batch_size: 1
+  lr: 0.0005
+  weight_decay: 0.0001
+  val_split: 0.2
+  seed: 42
+  num_workers: 0
+  num_threads: 4
+  dice_weight: 1.5
+  bce_weight: 0.7
+  metric_threshold: 0.5
+
+predict:
+  min_component_area: 50
+  threshold: 0.6
+
+output:
+  run_dir: outputs/moe_test_run
+  prediction_dir: outputs/moe_test_predictions
+  graph_dir: outputs/moe_test_graphs
