@@ -177,7 +177,8 @@ class MoEUNet(nn.Module):
         in_channels: int = 3,
         out_channels: int = 1,
         base_channels: int = 16,
-        num_experts: int = 3,
+        num_experts: int = 2,
+        expert_names=None,
         router_hidden_channels: int = 32,
         top_k: int | None = None,
         load_balance_weight: float = 0.01,
@@ -191,6 +192,15 @@ class MoEUNet(nn.Module):
             raise ValueError("top_k must be between 1 and num_experts.")
 
         self.num_experts = num_experts
+
+        if expert_names is None:
+            expert_names = ["urban", "rural"]
+
+        if len(expert_names) != num_experts:
+            raise ValueError("expert_names length must match num_experts.")
+
+        self.expert_names = expert_names
+
         self.top_k = top_k
         self.load_balance_weight = load_balance_weight
 
@@ -275,6 +285,7 @@ class MoEUNet(nn.Module):
             "mean_usage": mean_usage,
             "entropy": entropy,
             "selected_expert": selected_expert,
+            "expert_names": self.expert_names,
         }
 
     def forward(
@@ -346,7 +357,8 @@ def build_model(config: dict) -> nn.Module:
             in_channels=model_cfg.get("in_channels", 3),
             out_channels=model_cfg.get("out_channels", 1),
             base_channels=model_cfg.get("base_channels", 16),
-            num_experts=model_cfg.get("num_experts", 3),
+            num_experts=model_cfg.get("num_experts", 2),
+            expert_names=model_cfg.get("expert_names", None),
             router_hidden_channels=model_cfg.get("router_hidden_channels", 32),
             top_k=model_cfg.get("top_k", None),
             load_balance_weight=model_cfg.get("load_balance_weight", 0.01),

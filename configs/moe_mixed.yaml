@@ -1,6 +1,6 @@
 data:
-  image_dir: data/mixed/images
-  mask_dir: data/mixed/masks
+  image_dir: data/spacenet3/8bit/Vegas/images
+  mask_dir: data/spacenet3/8bit/Vegas/mask
   img_size: 256
   strict_pairing: true
   mask_threshold: 127
@@ -10,23 +10,14 @@ model:
   architecture: moe
   in_channels: 3
   out_channels: 1
-
-  # Smaller base_channels keeps MoE lighter.
-  # Because MoE has multiple U-Nets, base_channels: 16 means roughly 3 U-Nets.
   base_channels: 8
-
-  # Number of expert U-Nets.
-  num_experts: 3
-
-  # Router size.
+  num_experts: 2
+  expert_names:
+    - urban
+    - rural
   router_hidden_channels: 16
-
-  # Use only the top 2 experts per image.
-  # This makes the model more like a real sparse MoE.
-  top_k: 2
-
-  # Small regularization to prevent router collapse.
-  load_balance_weight: 0.01
+  top_k: null
+  load_balance_weight: 0.04
 
 train:
   epochs: 60
