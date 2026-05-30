@@ -1,6 +1,16 @@
 data:
-  image_dir: data/spacenet3/8bit/Vegas/images
-  mask_dir: data/spacenet3/8bit/Vegas/mask
+  image_dirs:
+    - data/spacenet3/8bit/Khartoum/images
+    - data/spacenet3/8bit/Paris/images
+    - data/spacenet3/8bit/Shanghai/images
+    - data/spacenet3/8bit/Vegas/images
+
+  mask_dirs:
+    - data/spacenet3/8bit/Khartoum/mask
+    - data/spacenet3/8bit/Paris/mask
+    - data/spacenet3/8bit/Shanghai/mask
+    - data/spacenet3/8bit/Vegas/mask
+
   img_size: 256
   strict_pairing: true
   mask_threshold: 127
@@ -20,7 +30,7 @@ model:
   load_balance_weight: 0.04
 
 train:
-  epochs: 60
+  epochs: 120
   batch_size: 1
   lr: 0.0005
   weight_decay: 0.0001

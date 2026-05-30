@@ -292,8 +292,8 @@ def main() -> None:
     run_dir = ensure_dir(cfg["output"]["run_dir"])
 
     dataset = RoadSegmentationDataset(
-        image_dir=data_cfg["image_dir"],
-        mask_dir=data_cfg["mask_dir"],
+        image_dir=data_cfg.get("image_dirs", data_cfg.get("image_dir")),
+        mask_dir=data_cfg.get("mask_dirs", data_cfg.get("mask_dir")),
         img_size=data_cfg.get("img_size", 256),
         strict_pairing=data_cfg.get("strict_pairing", True),
         mask_threshold=data_cfg.get("mask_threshold", 127),

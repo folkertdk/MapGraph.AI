@@ -172,8 +172,8 @@ class RoadSegmentationDataset(Dataset):
 
     def __init__(
         self,
-        image_dir: str | Path,
-        mask_dir: str | Path,
+        image_dir: str | Path | list[str] | list[Path],
+        mask_dir: str | Path | list[str] | list[Path],
         img_size: int = 256,
         strict_pairing: bool = True,
         mask_threshold: int = 127,
@@ -183,11 +183,22 @@ class RoadSegmentationDataset(Dataset):
         self.mask_threshold = int(mask_threshold)
         self.invert_mask = bool(invert_mask)
 
-        self.pairs = make_pairs(
-            image_dir=image_dir,
-            mask_dir=mask_dir,
-            strict_pairing=strict_pairing,
-        )
+        image_dirs = [image_dir] if isinstance(image_dir, (str, Path)) else image_dir
+        mask_dirs = [mask_dir] if isinstance(mask_dir, (str, Path)) else mask_dir
+
+        if len(image_dirs) != len(mask_dirs):
+            raise ValueError("image_dirs and mask_dirs must have same length.")
+
+        self.pairs = []
+
+        for img_dir, msk_dir in zip(image_dirs, mask_dirs):
+            self.pairs.extend(
+                make_pairs(
+                    image_dir=img_dir,
+                    mask_dir=msk_dir,
+                    strict_pairing=strict_pairing,
+                )
+            )
 
     def __len__(self) -> int:
         return len(self.pairs)
