@@ -216,10 +216,27 @@ def run_epoch(
 
             seg_loss = criterion(logits, masks)
 
+            router_loss = None
+
+            if isinstance(output, (tuple, list)) and len(output) >= 2 and "domain_label" in batch:
+                router_probs = output[1]
+                domain_labels = batch["domain_label"].to(device)
+
+                valid = domain_labels >= 0
+                if valid.any():
+                    router_loss = torch.nn.functional.nll_loss(
+                        torch.log(router_probs[valid].clamp_min(1e-8)),
+                        domain_labels[valid],
+                    )
+
+            loss = seg_loss
+
             if aux_loss is not None:
-                loss = seg_loss + aux_loss
-            else:
-                loss = seg_loss
+                loss = loss + aux_loss
+
+            if router_loss is not None:
+                router_supervision_weight = 0.05
+                loss = loss + router_supervision_weight * router_loss
 
             if train:
                 optimizer.zero_grad(set_to_none=True)

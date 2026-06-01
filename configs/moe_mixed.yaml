@@ -23,8 +23,8 @@ model:
   base_channels: 8
   num_experts: 2
   expert_names:
-    - urban
-    - rural
+    - structured
+    - irregular
   router_hidden_channels: 16
   top_k: null
   load_balance_weight: 0.04
@@ -41,11 +41,12 @@ train:
   dice_weight: 1.5
   bce_weight: 0.7
   metric_threshold: 0.5
+  router_supervision_weight: 0.05
 
 predict:
   min_component_area: 20
 
 output:
-  run_dir: outputs/moe_mixed_run
-  prediction_dir: outputs/moe_mixed_predictions
-  graph_dir: outputs/moe_mixed_graphs
+  run_dir: outputs/moe_weak_supervised_run
+  prediction_dir: outputs/moe_weak_supervised_predictions
+  graph_dir: outputs/moe_weak_supervised_graphs

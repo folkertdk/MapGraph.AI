@@ -206,6 +206,15 @@ class RoadSegmentationDataset(Dataset):
     def __getitem__(self, index: int):
         image_path, mask_path = self.pairs[index]
 
+        path_lower = str(image_path).lower()
+
+        if "vegas" in path_lower or "shanghai" in path_lower:
+            domain_label = 0  # structured
+        elif "paris" in path_lower or "khartoum" in path_lower:
+            domain_label = 1  # irregular
+        else:
+            domain_label = -1
+
         return {
             "image": load_rgb(image_path, self.img_size),
             "mask": load_mask(
@@ -216,6 +225,7 @@ class RoadSegmentationDataset(Dataset):
             ),
             "image_path": str(image_path),
             "mask_path": str(mask_path),
+            "domain_label": torch.tensor(domain_label, dtype=torch.long),
         }
 
 
